@@ -188,56 +188,25 @@ export default async function handler(
     ? ingredientsRaw.split(',').map((s) => s.trim()).filter(Boolean)
     : [];
 
-  const { apiKey, baseUrl } = resolveMealDbConfig();
-
-  if (!apiKey) {
-    const matchedLocal =
-      selectedNames.length > 0
-        ? LOCAL_FALLBACK_RECIPES.filter((r) =>
-            r.ingredients.some((ing) =>
-              selectedNames.some(
-                (sel) =>
-                  ing.toLowerCase().includes(sel.toLowerCase()) ||
-                  sel.toLowerCase().includes(ing.toLowerCase())
-              )
-            )
-          )
-        : LOCAL_FALLBACK_RECIPES;
-
-    res.status(200).json({
-      recipes: (matchedLocal.length > 0 ? matchedLocal : LOCAL_FALLBACK_RECIPES).map((r) => ({
-        ...r,
-        matchedAvailable:
-          selectedNames.length > 0
-            ? r.ingredients.filter((ing) =>
-                selectedNames.some((sel) => ing.toLowerCase().includes(sel.toLowerCase()))
-              )
-            : r.ingredients,
-      })),
-      source: 'local-fallback',
-      configured: false,
-      queriedIngredients: extractKeywords(selectedNames),
-    });
-    return;
-  }
+  const { baseEndpoint } = resolveMealDbConfig();
 
   const rawMeals: RawMeal[] = [];
   let queriedIngredients: string[] = [];
 
   if (search) {
     const data = await fetchJson<{ meals?: RawMeal[] | null }>(
-      `${baseUrl}/${encodeURIComponent(apiKey)}/search.php?s=${encodeURIComponent(search)}`
+      `${baseEndpoint}/search.php?s=${encodeURIComponent(search)}`
     );
     rawMeals.push(...(data?.meals || []));
   } else if (category) {
     const data = await fetchJson<{ meals?: Array<{ idMeal: string }> | null }>(
-      `${baseUrl}/${encodeURIComponent(apiKey)}/filter.php?c=${encodeURIComponent(category)}`
+      `${baseEndpoint}/filter.php?c=${encodeURIComponent(category)}`
     );
     const ids = (data?.meals || []).slice(0, 6).map((m) => m.idMeal);
     const lookups = await Promise.all(
       ids.map((id) =>
         fetchJson<{ meals?: RawMeal[] | null }>(
-          `${baseUrl}/${encodeURIComponent(apiKey)}/lookup.php?i=${encodeURIComponent(id)}`
+          `${baseEndpoint}/lookup.php?i=${encodeURIComponent(id)}`
         )
       )
     );
@@ -252,7 +221,7 @@ export default async function handler(
     const responses = await Promise.all(
       queriedIngredients.map((kw) =>
         fetchJson<{ meals?: Array<{ idMeal: string }> | null }>(
-          `${baseUrl}/${encodeURIComponent(apiKey)}/filter.php?i=${encodeURIComponent(kw)}`
+          `${baseEndpoint}/filter.php?i=${encodeURIComponent(kw)}`
         )
       )
     );
@@ -268,7 +237,7 @@ export default async function handler(
     const lookups = await Promise.all(
       rankedIds.map((id) =>
         fetchJson<{ meals?: RawMeal[] | null }>(
-          `${baseUrl}/${encodeURIComponent(apiKey)}/lookup.php?i=${encodeURIComponent(id)}`
+          `${baseEndpoint}/lookup.php?i=${encodeURIComponent(id)}`
         )
       )
     );

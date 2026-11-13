@@ -11,6 +11,7 @@ export interface ServerlessResponse {
 }
 
 const DEFAULT_MEALDB_BASE_URL = 'https://www.themealdb.com/api/json/v1';
+const DEFAULT_PUBLIC_KEYLESS_SEGMENT = '1';
 
 const KEY_ENV_CANDIDATES = [
   'THEMEALDB_API_KEY',
@@ -37,25 +38,25 @@ function cleanEnvValue(raw: string | undefined): string {
 }
 
 export interface MealDbResolvedConfig {
-  apiKey: string;
-  baseUrl: string;
+  baseEndpoint: string;
+  mode: 'keyless-public' | 'custom-key';
   keySource: string | null;
 }
 
 /**
- * Resolves TheMealDB API configuration strictly from environment variables
- * (never hardcoded). Supports standard key env names as well as full URLs
- * placed in THEMEALDB_URL / THEMEALDB_BASE_URL.
+ * Resolves TheMealDB API endpoint.
+ * TheMealDB's v1 API is keyless/public by default (`/api/json/v1/1`),
+ * while optionally supporting a custom Patreon key or base URL override via env vars.
  */
 export function resolveMealDbConfig(): MealDbResolvedConfig {
   let baseUrl = DEFAULT_MEALDB_BASE_URL;
-  let apiKey = '';
+  let customSegment = '';
   let keySource: string | null = null;
 
   for (const envName of KEY_ENV_CANDIDATES) {
     const val = cleanEnvValue(process.env[envName]);
     if (val) {
-      apiKey = val;
+      customSegment = val;
       keySource = envName;
       break;
     }
@@ -65,12 +66,11 @@ export function resolveMealDbConfig(): MealDbResolvedConfig {
     const rawUrl = cleanEnvValue(process.env[urlEnv]);
     if (!rawUrl) continue;
 
-    // Match URLs like https://www.themealdb.com/api/json/v1/<key>(/categories.php)?
     const match = rawUrl.match(/^(https?:\/\/[^/]+\/api\/json\/v\d+)\/([^/?#]+)/i);
     if (match) {
       baseUrl = match[1].replace(/\/+$/, '');
-      if (!apiKey && match[2]) {
-        apiKey = match[2];
+      if (!customSegment && match[2]) {
+        customSegment = match[2];
         keySource = urlEnv;
       }
       break;
@@ -81,18 +81,24 @@ export function resolveMealDbConfig(): MealDbResolvedConfig {
     }
   }
 
-  return { apiKey, baseUrl, keySource };
+  const segment = customSegment || DEFAULT_PUBLIC_KEYLESS_SEGMENT;
+  const baseEndpoint = `${baseUrl}/${encodeURIComponent(segment)}`;
+
+  return {
+    baseEndpoint,
+    mode: customSegment && customSegment !== DEFAULT_PUBLIC_KEYLESS_SEGMENT ? 'custom-key' : 'keyless-public',
+    keySource,
+  };
 }
 
 /**
  * Serverless health check endpoint for Kampung Pantry API.
- * Reports service status and whether TheMealDB credentials are configured
- * via environment variables without exposing any secret key values.
+ * Verifies API service health and live reachability of TheMealDB's keyless v1 endpoint.
  */
-export default function handler(
+export default async function handler(
   req: ServerlessRequest,
   res: ServerlessResponse
-): void {
+): Promise<void> {
   if (req.method && req.method !== 'GET') {
     res.status(405).json({ error: 'Method not allowed. Use GET.' });
     return;
@@ -100,21 +106,29 @@ export default function handler(
 
   res.setHeader?.('Cache-Control', 'no-store, max-age=0');
 
-  const { apiKey, keySource } = resolveMealDbConfig();
-  const configured = Boolean(apiKey);
+  const { baseEndpoint, mode } = resolveMealDbConfig();
+  let themealdbReachable = false;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3500);
+  try {
+    const upstream = await fetch(`${baseEndpoint}/categories.php`, {
+      signal: controller.signal,
+    });
+    themealdbReachable = upstream.ok;
+  } catch {
+    themealdbReachable = false;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   res.status(200).json({
     ok: true,
     status: 'ok',
     service: 'Kampung Pantry API',
     timestamp: new Date().toISOString(),
-    themealdbConfigured: configured,
-    ...(keySource ? { themealdbKeySource: keySource } : {}),
-    ...(!configured
-      ? {
-          configHint:
-            'Set THEMEALDB_API_KEY in your Vercel Environment Variables (or local .env) and redeploy to enable live TheMealDB queries.',
-        }
-      : {}),
+    themealdbConfigured: true,
+    themealdbMode: mode,
+    themealdbReachable,
   });
 }

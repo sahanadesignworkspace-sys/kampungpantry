@@ -560,10 +560,7 @@ interface MealDbRawMeal {
 const mealDbCache = new Map<string, { expiresAt: number; data: unknown }>();
 
 async function fetchMealDbJson<T>(endpointPath: string): Promise<T | null> {
-  const { apiKey, baseUrl } = resolveMealDbConfig();
-  if (!apiKey) {
-    return null;
-  }
+  const { baseEndpoint } = resolveMealDbConfig();
 
   const now = Date.now();
   const cached = mealDbCache.get(endpointPath);
@@ -574,7 +571,7 @@ async function fetchMealDbJson<T>(endpointPath: string): Promise<T | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 4500);
   try {
-    const res = await fetch(`${baseUrl}/${encodeURIComponent(apiKey)}${endpointPath}`, {
+    const res = await fetch(`${baseEndpoint}${endpointPath}`, {
       signal: controller.signal,
     });
     if (!res.ok) return null;
@@ -773,8 +770,8 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '3mb' }));
 
-  app.get('/api/health', (req: Request, res: Response) => {
-    healthHandler(req, res);
+  app.get('/api/health', async (req: Request, res: Response) => {
+    await healthHandler(req, res);
   });
 
   app.get('/api/categories', async (req: Request, res: Response) => {
@@ -1165,7 +1162,7 @@ async function startServer() {
     res.json({
       recipes: filtered,
       source: usingLiveMealDb ? 'themealdb' : 'local-fallback',
-      configured: Boolean(resolveMealDbConfig().apiKey),
+      configured: true,
       queriedIngredients,
     });
   });

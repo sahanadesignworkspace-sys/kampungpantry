@@ -102,7 +102,7 @@ export function RecipesView({
                 }.`
               : mealDbConfigured
                 ? 'Showing saved pantry recipes prioritising ingredients available in the fridge.'
-                : 'Showing local pantry matches. Add THEMEALDB_API_KEY in environment variables to enable live TheMealDB results.'}
+                : 'Showing local pantry recipes while live TheMealDB results are temporarily unavailable.'}
           </p>
         </div>
         <button

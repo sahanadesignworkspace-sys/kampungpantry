@@ -17,7 +17,7 @@ let cachedCategories: { expiresAt: number; items: MealCategory[] } | null = null
 
 /**
  * Serverless endpoint that pulls live recipe categories from TheMealDB
- * (`categories.php`) using the THEMEALDB_API_KEY environment variable.
+ * (`categories.php`) using the keyless public v1 endpoint (or optional env override).
  * Excludes non-Halal categories (e.g. Pork) per community fridge guidelines.
  */
 export default async function handler(
@@ -29,17 +29,7 @@ export default async function handler(
     return;
   }
 
-  const { apiKey, baseUrl } = resolveMealDbConfig();
-  if (!apiKey) {
-    res.setHeader?.('Cache-Control', 'no-store, max-age=0');
-    res.status(503).json({
-      error:
-        'THEMEALDB_API_KEY is not configured. Add your key in environment variables to load live recipe categories.',
-      categories: [],
-      configured: false,
-    });
-    return;
-  }
+  const { baseEndpoint } = resolveMealDbConfig();
 
   if (cachedCategories && cachedCategories.expiresAt > Date.now()) {
     res.status(200).json({
@@ -54,7 +44,7 @@ export default async function handler(
   const timeout = setTimeout(() => controller.abort(), 5000);
 
   try {
-    const endpoint = `${baseUrl}/${encodeURIComponent(apiKey)}/categories.php`;
+    const endpoint = `${baseEndpoint}/categories.php`;
     const response = await fetch(endpoint, { signal: controller.signal });
     if (!response.ok) {
       res.status(502).json({
