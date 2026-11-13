@@ -40,6 +40,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('home');
   const [items, setItems] = useState<FoodItem[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [recipeSource, setRecipeSource] = useState<'themealdb' | 'local-fallback'>('themealdb');
+  const [queriedIngredients, setQueriedIngredients] = useState<string[]>([]);
+  const [loadingRecipes, setLoadingRecipes] = useState(false);
   const [stats, setStats] = useState<CommunityStats | null>(null);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [recentActivities, setRecentActivities] = useState<ActivityRecord[]>([]);
@@ -90,6 +93,8 @@ export default function App() {
 
       setItems(invData.items || []);
       setRecipes(recData.recipes || []);
+      setRecipeSource(recData.source === 'local-fallback' ? 'local-fallback' : 'themealdb');
+      setQueriedIngredients(recData.queriedIngredients || []);
       setStats(statsData.stats || null);
       setAnnouncements(statsData.announcements || []);
       setRecentActivities(statsData.recentActivities || []);
@@ -115,6 +120,7 @@ export default function App() {
           const parsed = JSON.parse(cached);
           setItems(parsed.items || []);
           setRecipes(parsed.recipes || []);
+          setRecipeSource('local-fallback');
           setStats(parsed.stats || null);
           setAnnouncements(parsed.announcements || []);
           setRecentActivities(parsed.recentActivities || []);
@@ -126,6 +132,30 @@ export default function App() {
       setLoading(false);
     }
   }, []);
+
+  const handleSearchRecipes = useCallback(
+    async (opts: { q?: string; ingredient?: string }) => {
+      setLoadingRecipes(true);
+      try {
+        const params = new URLSearchParams();
+        if (opts.q) params.set('q', opts.q);
+        if (opts.ingredient) params.set('ingredient', opts.ingredient);
+        const query = params.toString();
+        const res = await fetch(`/api/recipes${query ? `?${query}` : ''}`);
+        if (res.ok) {
+          const data = await res.json();
+          setRecipes(data.recipes || []);
+          setRecipeSource(data.source === 'local-fallback' ? 'local-fallback' : 'themealdb');
+          setQueriedIngredients(data.queriedIngredients || []);
+        }
+      } catch {
+        setRecipeSource('local-fallback');
+      } finally {
+        setLoadingRecipes(false);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     fetchAllData();
@@ -274,6 +304,10 @@ export default function App() {
             {activeTab === 'recipes' && (
               <RecipesView
                 recipes={recipes}
+                recipeSource={recipeSource}
+                queriedIngredients={queriedIngredients}
+                loadingRecipes={loadingRecipes}
+                onSearchRecipes={handleSearchRecipes}
                 onGoToFind={() => handleNavigate('find')}
               />
             )}

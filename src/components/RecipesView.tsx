@@ -1,10 +1,21 @@
 import { useMemo, useState } from 'react';
-import { CheckCircle2, Clock, Flame, Users } from 'lucide-react';
+import {
+  CheckCircle2,
+  Clock,
+  ExternalLink,
+  Flame,
+  Search,
+  Users,
+} from 'lucide-react';
 import type { Recipe } from '../types/pantry';
 import { FoodImage } from './FoodImage';
 
 interface RecipesViewProps {
   recipes: Recipe[];
+  recipeSource: 'themealdb' | 'local-fallback';
+  queriedIngredients: string[];
+  loadingRecipes: boolean;
+  onSearchRecipes: (opts: { q?: string; ingredient?: string }) => void;
   onGoToFind: () => void;
 }
 
@@ -16,14 +27,45 @@ const DIETARY_FILTERS = [
   'Under 20 Mins',
 ] as const;
 
-export function RecipesView({ recipes, onGoToFind }: RecipesViewProps) {
+const INGREDIENT_SHORTCUTS = [
+  { label: 'Auto-Match Fridge', value: '' },
+  { label: 'Eggs', value: 'eggs' },
+  { label: 'Rice', value: 'rice' },
+  { label: 'Greens / Spinach', value: 'spinach' },
+  { label: 'Banana', value: 'banana' },
+  { label: 'Lentils', value: 'lentils' },
+  { label: 'Bread', value: 'bread' },
+];
+
+export function RecipesView({
+  recipes,
+  recipeSource,
+  queriedIngredients,
+  loadingRecipes,
+  onSearchRecipes,
+  onGoToFind,
+}: RecipesViewProps) {
   const [dietFilter, setDietFilter] = useState<string>('All');
-  const [expandedId, setExpandedId] = useState<string>(recipes[0]?.id || 'REC-1');
+  const [searchInput, setSearchInput] = useState('');
+  const [activeIngredient, setActiveIngredient] = useState('');
+  const [expandedId, setExpandedId] = useState<string>('');
 
   const visibleRecipes = useMemo(() => {
     if (dietFilter === 'All') return recipes;
     return recipes.filter((r) => r.dietaryTags.includes(dietFilter));
   }, [recipes, dietFilter]);
+
+  function handleSearchSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setActiveIngredient('');
+    onSearchRecipes({ q: searchInput.trim() });
+  }
+
+  function handleIngredientClick(ing: string) {
+    setActiveIngredient(ing);
+    setSearchInput('');
+    onSearchRecipes(ing ? { ingredient: ing } : {});
+  }
 
   return (
     <div className="space-y-6">
@@ -33,7 +75,13 @@ export function RecipesView({ recipes, onGoToFind }: RecipesViewProps) {
             Smart Waste-Saving Recipes
           </h1>
           <p className="mt-1 text-base text-[#4B5B51]">
-            Simple, comforting meals ranked by ingredients available in the fridge right now — prioritising items to use soon.
+            {recipeSource === 'themealdb'
+              ? `Powered by TheMealDB & screened for Halal-friendly guidelines${
+                  queriedIngredients.length > 0
+                    ? ` — matched to fridge items (${queriedIngredients.join(', ')})`
+                    : ''
+                }.`
+              : 'Showing offline saved recipes prioritising ingredients available in the fridge.'}
           </p>
         </div>
         <button
@@ -45,142 +93,233 @@ export function RecipesView({ recipes, onGoToFind }: RecipesViewProps) {
         </button>
       </div>
 
-      {/* Dietary Filters */}
-      <div
-        className="flex items-center gap-2 overflow-x-auto pb-1"
-        role="tablist"
-        aria-label="Dietary preferences"
-      >
-        {DIETARY_FILTERS.map((tag) => (
+      {/* Search & Live Ingredient Selector */}
+      <div className="rounded-2xl border border-[#E2E6DF] bg-white p-4 space-y-4">
+        <form onSubmit={handleSearchSubmit} className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1">
+            <Search
+              className="w-5 h-5 text-[#59695F] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+              aria-hidden="true"
+            />
+            <input
+              type="search"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search TheMealDB dishes (e.g. fried rice, omelette, dal)..."
+              aria-label="Search recipes on TheMealDB"
+              className="w-full min-h-[48px] rounded-xl border border-[#CFD7CC] bg-[#FBFBF8] pl-11 pr-4 text-base text-[#1A241E] focus:border-[#1B5E3A] focus:bg-white focus:outline-none"
+            />
+          </div>
           <button
-            key={tag}
-            type="button"
-            role="tab"
-            aria-selected={dietFilter === tag}
-            onClick={() => setDietFilter(tag)}
-            className={`min-h-[44px] px-4 py-2 rounded-xl text-sm font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              dietFilter === tag
-                ? 'bg-[#1B5E3A] text-white'
-                : 'bg-white border border-[#DCE2DA] text-[#35443B] hover:bg-[#F2F5F1]'
-            }`}
+            type="submit"
+            className="min-h-[48px] px-5 rounded-xl bg-[#1B5E3A] text-white text-sm font-semibold hover:bg-[#154A2D] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            {tag}
+            Search Recipes
           </button>
-        ))}
+        </form>
+
+        {/* Quick Fridge Ingredient Shortcuts */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          {INGREDIENT_SHORTCUTS.map((item) => {
+            const active = activeIngredient === item.value && !searchInput;
+            return (
+              <button
+                key={item.label}
+                type="button"
+                onClick={() => handleIngredientClick(item.value)}
+                className={`min-h-[40px] px-3.5 py-1.5 rounded-xl border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  active
+                    ? 'border-[#1B5E3A] bg-[#F2F7F3] text-[#1B5E3A]'
+                    : 'border-[#DCE2DA] bg-[#FBFBF8] text-[#35443B] hover:border-[#1B5E3A]'
+                }`}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Dietary Filters */}
+        <div
+          className="flex items-center gap-2 overflow-x-auto pt-1 border-t border-[#EAECE7]"
+          role="tablist"
+          aria-label="Dietary preferences"
+        >
+          {DIETARY_FILTERS.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              role="tab"
+              aria-selected={dietFilter === tag}
+              onClick={() => setDietFilter(tag)}
+              className={`min-h-[44px] px-4 py-2 rounded-xl text-sm font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                dietFilter === tag
+                  ? 'bg-[#1B5E3A] text-white'
+                  : 'bg-[#F2F5F1] text-[#35443B] hover:bg-[#E5ECE4]'
+              }`}
+            >
+              {tag}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Recipe Cards */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {visibleRecipes.map((recipe) => {
-          const isOpen = expandedId === recipe.id;
-          const totalMins = recipe.prepMinutes + recipe.cookMinutes;
-          const expiringCount = recipe.matchedExpiringSoon?.length || 0;
-          const availableCount = recipe.matchedAvailable?.length || 0;
+      {/* Recipe Results */}
+      {loadingRecipes ? (
+        <div className="rounded-2xl border border-[#E2E6DF] bg-white p-10 text-center text-base font-medium text-[#4B5B51]">
+          Finding Halal-friendly recipes from TheMealDB...
+        </div>
+      ) : visibleRecipes.length === 0 ? (
+        <div className="rounded-2xl border border-[#E2E6DF] bg-white p-10 text-center space-y-3">
+          <p className="text-lg font-semibold text-[#14241B]">
+            No matching recipes found for this filter
+          </p>
+          <p className="text-sm text-[#4B5B51]">
+            Try switching back to Auto-Match Fridge or selecting All dietary options.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setDietFilter('All');
+              handleIngredientClick('');
+            }}
+            className="min-h-[44px] px-5 py-2 rounded-xl border border-[#1B5E3A] text-sm font-semibold text-[#1B5E3A] hover:bg-[#F2F7F3] cursor-pointer"
+          >
+            Reset Recipe Filters
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {visibleRecipes.map((recipe) => {
+            const isOpen = expandedId === recipe.id;
+            const totalMins = recipe.prepMinutes + recipe.cookMinutes;
+            const expiringCount = recipe.matchedExpiringSoon?.length || 0;
+            const availableCount = recipe.matchedAvailable?.length || 0;
 
-          return (
-            <article
-              key={recipe.id}
-              className="rounded-2xl border border-[#E2E6DF] bg-white overflow-hidden flex flex-col"
-            >
-              <div className="aspect-[16/10] w-full bg-[#EEF3EE] overflow-hidden">
-                <FoodImage
-                  src={recipe.imageUrl}
-                  alt={recipe.title}
-                  className="w-full h-full object-cover"
-                />
-              </div>
-
-              <div className="p-6 space-y-4 flex-1 flex flex-col justify-between">
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium text-[#4B5B51]">
-                    <span className="inline-flex items-center gap-1 tabular-nums">
-                      <Clock className="w-3.5 h-3.5 text-[#1B5E3A]" aria-hidden="true" />
-                      {totalMins} mins total ({recipe.prepMinutes}m prep · {recipe.cookMinutes}m cook)
-                    </span>
-                    <span aria-hidden="true">·</span>
-                    <span className="inline-flex items-center gap-1 tabular-nums">
-                      <Users className="w-3.5 h-3.5 text-[#1B5E3A]" aria-hidden="true" />
-                      Serves {recipe.servings}
-                    </span>
-                  </div>
-
-                  <h2 className="text-xl font-bold text-[#14241B]">{recipe.title}</h2>
-                  <p className="text-sm text-[#35443B] leading-relaxed">{recipe.description}</p>
-
-                  {/* Fridge Ingredient Match Callout */}
-                  <div className="rounded-xl border border-[#DCE2DA] bg-[#F7FAF7] p-3.5 space-y-1.5 text-sm">
-                    <div className="flex items-center gap-2 font-semibold text-[#1B5E3A]">
-                      <CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden="true" />
-                      <span>
-                        {availableCount} of {recipe.ingredients.length} ingredients in fridge now
-                      </span>
-                    </div>
-                    {expiringCount > 0 && (
-                      <div className="flex items-center gap-2 text-xs font-bold text-[#92400E]">
-                        <Flame className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                        <span>
-                          Helps rescue use-soon items: {recipe.matchedExpiringSoon?.join(', ')}
-                        </span>
-                      </div>
-                    )}
-                    <div className="text-xs text-[#4B5B51]">{recipe.wasteSavedNote}</div>
-                  </div>
-
-                  {/* Ingredient List */}
-                  <div>
-                    <div className="text-xs font-bold text-[#4B5B51] mb-1.5">
-                      Key Ingredients
-                    </div>
-                    <ul className="space-y-1 text-sm text-[#1A241E]">
-                      {recipe.ingredients.map((ing) => {
-                        const inFridge = recipe.matchedAvailable?.includes(ing);
-                        const isExpiring = recipe.matchedExpiringSoon?.includes(ing);
-                        return (
-                          <li key={ing} className="flex items-center justify-between gap-2">
-                            <span>• {ing}</span>
-                            {isExpiring ? (
-                              <span className="text-xs font-semibold text-[#92400E] shrink-0">
-                                Use Soon in Fridge
-                              </span>
-                            ) : inFridge ? (
-                              <span className="text-xs font-semibold text-[#1B5E3A] shrink-0">
-                                In Fridge
-                              </span>
-                            ) : (
-                              <span className="text-xs text-[#6B7A70] shrink-0">Pantry staple</span>
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-
-                  {isOpen && (
-                    <div className="pt-3 border-t border-[#EAECE7] space-y-2">
-                      <div className="text-xs font-bold text-[#14241B]">
-                        Easy Cooking Steps
-                      </div>
-                      <ol className="space-y-2 text-sm text-[#2C3B32] list-decimal list-inside leading-relaxed">
-                        {recipe.steps.map((step, idx) => (
-                          <li key={idx}>{step}</li>
-                        ))}
-                      </ol>
-                    </div>
-                  )}
+            return (
+              <article
+                key={recipe.id}
+                className="rounded-2xl border border-[#E2E6DF] bg-white overflow-hidden flex flex-col"
+              >
+                <div className="aspect-[16/10] w-full bg-[#EEF3EE] overflow-hidden">
+                  <FoodImage
+                    src={recipe.imageUrl}
+                    alt={recipe.title}
+                    className="w-full h-full object-cover"
+                  />
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setExpandedId(isOpen ? '' : recipe.id)}
-                  className="w-full min-h-[44px] rounded-xl border border-[#1B5E3A] bg-white text-sm font-semibold text-[#1B5E3A] hover:bg-[#F2F7F3] transition-colors cursor-pointer"
-                >
-                  {isOpen ? 'Hide Cooking Steps' : 'Show Cooking Steps'}
-                </button>
-              </div>
-            </article>
-          );
-        })}
-      </div>
+                <div className="p-6 space-y-4 flex-1 flex flex-col justify-between">
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-medium text-[#4B5B51]">
+                      <span>{recipe.source || 'TheMealDB'}</span>
+                      {recipe.cuisine && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>{recipe.cuisine}</span>
+                        </>
+                      )}
+                      {recipe.category && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>{recipe.category}</span>
+                        </>
+                      )}
+                      <span aria-hidden="true">·</span>
+                      <span className="inline-flex items-center gap-1 tabular-nums">
+                        <Clock className="w-3.5 h-3.5 text-[#1B5E3A]" aria-hidden="true" />
+                        {totalMins} mins
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span className="inline-flex items-center gap-1 tabular-nums">
+                        <Users className="w-3.5 h-3.5 text-[#1B5E3A]" aria-hidden="true" />
+                        Serves {recipe.servings}
+                      </span>
+                    </div>
+
+                    <h2 className="text-xl font-bold text-[#14241B]">{recipe.title}</h2>
+                    <p className="text-sm text-[#35443B] leading-relaxed">{recipe.description}</p>
+
+                    {/* Fridge Ingredient Match Callout */}
+                    <div className="rounded-xl border border-[#DCE2DA] bg-[#F7FAF7] p-3.5 space-y-1.5 text-sm">
+                      <div className="flex items-center gap-2 font-semibold text-[#1B5E3A]">
+                        <CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden="true" />
+                        <span>
+                          {availableCount > 0
+                            ? `Uses ${availableCount} ingredient(s) in fridge: ${recipe.matchedAvailable?.join(', ')}`
+                            : 'Halal-friendly recipe matching pantry staples'}
+                        </span>
+                      </div>
+                      {expiringCount > 0 && (
+                        <div className="flex items-center gap-2 text-xs font-bold text-[#92400E]">
+                          <Flame className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                          <span>
+                            Prioritises use-soon items: {recipe.matchedExpiringSoon?.join(', ')}
+                          </span>
+                        </div>
+                      )}
+                      <div className="text-xs text-[#4B5B51]">{recipe.wasteSavedNote}</div>
+                    </div>
+
+                    {/* Ingredient List */}
+                    <div>
+                      <div className="text-xs font-bold text-[#4B5B51] mb-1.5">
+                        Ingredients ({recipe.ingredients.length})
+                      </div>
+                      <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm text-[#1A241E]">
+                        {(isOpen ? recipe.ingredients : recipe.ingredients.slice(0, 6)).map(
+                          (ing, idx) => (
+                            <li key={`${ing}-${idx}`} className="truncate">
+                              • {ing}
+                            </li>
+                          )
+                        )}
+                      </ul>
+                      {!isOpen && recipe.ingredients.length > 6 && (
+                        <div className="mt-1 text-xs text-[#59695F]">
+                          + {recipe.ingredients.length - 6} more ingredients inside instructions
+                        </div>
+                      )}
+                    </div>
+
+                    {isOpen && (
+                      <div className="pt-3 border-t border-[#EAECE7] space-y-3">
+                        <div className="text-xs font-bold text-[#14241B]">
+                          Cooking Steps
+                        </div>
+                        <ol className="space-y-2 text-sm text-[#2C3B32] list-decimal list-inside leading-relaxed">
+                          {recipe.steps.map((step, idx) => (
+                            <li key={idx}>{step}</li>
+                          ))}
+                        </ol>
+                        {recipe.youtubeUrl && (
+                          <a
+                            href={recipe.youtubeUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1B5E3A] hover:underline pt-1"
+                          >
+                            <span>Watch video guide on YouTube</span>
+                            <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+                          </a>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setExpandedId(isOpen ? '' : recipe.id)}
+                    className="w-full min-h-[44px] rounded-xl border border-[#1B5E3A] bg-white text-sm font-semibold text-[#1B5E3A] hover:bg-[#F2F7F3] transition-colors cursor-pointer"
+                  >
+                    {isOpen ? 'Hide Cooking Steps' : 'Show Full Recipe & Steps'}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

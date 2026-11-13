@@ -17,6 +17,9 @@ export function resolveFoodImage(imageUrl?: string, category?: ApprovedCategory)
   if (imageUrl && imageUrl.startsWith('data:image/')) {
     return imageUrl;
   }
+  if (imageUrl && imageUrl.startsWith('https://www.themealdb.com/images/')) {
+    return imageUrl;
+  }
   if (imageUrl === 'asset:hero') return IMAGE_ASSETS.hero;
   if (imageUrl === 'asset:choySum') return IMAGE_ASSETS.choySum;
   if (imageUrl === 'asset:fruit') return IMAGE_ASSETS.fruit;

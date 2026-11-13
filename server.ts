@@ -541,6 +541,228 @@ function requireAdminPin(req: Request, res: Response, next: NextFunction): void 
   next();
 }
 
+const MEALDB_BASE = 'https://www.themealdb.com/api/json/v1/1';
+const NON_HALAL_PATTERN =
+  /\b(pork|bacon|ham|prosciutto|pancetta|lard|chorizo|gammon|wine|beer|rum|brandy|whisky|whiskey|vodka|sherry|mirin|sake|bourbon|gin)\b/i;
+
+interface MealDbRawMeal {
+  idMeal: string;
+  strMeal: string;
+  strCategory?: string;
+  strArea?: string;
+  strInstructions?: string;
+  strMealThumb?: string;
+  strYoutube?: string;
+  [key: string]: string | undefined;
+}
+
+const mealDbCache = new Map<string, { expiresAt: number; data: unknown }>();
+
+async function fetchMealDbJson<T>(endpointPath: string): Promise<T | null> {
+  const now = Date.now();
+  const cached = mealDbCache.get(endpointPath);
+  if (cached && cached.expiresAt > now) {
+    return cached.data as T;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4500);
+  try {
+    const res = await fetch(`${MEALDB_BASE}${endpointPath}`, {
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as T;
+    mealDbCache.set(endpointPath, { expiresAt: now + 15 * 60 * 1000, data: json });
+    return json;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function extractFridgeKeywords(items: FoodItem[]): string[] {
+  const keywordMap: Array<[RegExp, string]> = [
+    [/choy\s*sum|bok\s*choy|pak\s*choi|kang\s*kong|spinach|greens|kale/i, 'spinach'],
+    [/egg/i, 'eggs'],
+    [/banana/i, 'banana'],
+    [/rice/i, 'rice'],
+    [/bread|loaf|toast/i, 'bread'],
+    [/lentil|dal/i, 'lentils'],
+    [/oat/i, 'oats'],
+    [/tomato/i, 'tomato'],
+    [/potato/i, 'potato'],
+    [/carrot/i, 'carrot'],
+    [/tofu/i, 'tofu'],
+    [/milk/i, 'milk'],
+    [/apple/i, 'apple'],
+    [/papaya/i, 'papaya'],
+  ];
+
+  // Prioritise items expiring soonest first
+  const sorted = [...items].sort(
+    (a, b) => daysUntilExpiry(a.expiryDate) - daysUntilExpiry(b.expiryDate)
+  );
+  const found = new Set<string>();
+  for (const item of sorted) {
+    for (const [pattern, kw] of keywordMap) {
+      if (pattern.test(item.name)) {
+        found.add(kw);
+      }
+    }
+    if (found.size >= 4) break;
+  }
+  if (found.size === 0) {
+    found.add('eggs');
+    found.add('rice');
+  }
+  return Array.from(found);
+}
+
+function isMealHalalFriendly(meal: MealDbRawMeal): boolean {
+  if (meal.strCategory && /pork/i.test(meal.strCategory)) return false;
+  if (NON_HALAL_PATTERN.test(meal.strMeal || '')) return false;
+  if (NON_HALAL_PATTERN.test(meal.strInstructions || '')) return false;
+  for (let i = 1; i <= 20; i++) {
+    const ing = meal[`strIngredient${i}`];
+    if (ing && NON_HALAL_PATTERN.test(ing)) return false;
+  }
+  return true;
+}
+
+function extractMealIngredients(meal: MealDbRawMeal): Array<{ raw: string; display: string }> {
+  const list: Array<{ raw: string; display: string }> = [];
+  for (let i = 1; i <= 20; i++) {
+    const ing = (meal[`strIngredient${i}`] || '').trim();
+    const measure = (meal[`strMeasure${i}`] || '').trim();
+    if (ing) {
+      list.push({
+        raw: ing,
+        display: measure ? `${measure} ${ing}` : ing,
+      });
+    }
+  }
+  return list;
+}
+
+function splitInstructions(instructions: string): string[] {
+  const cleaned = instructions
+    .replace(/\r\n/g, '\n')
+    .split(/\n+/)
+    .map((s) => s.replace(/^step\s*\d+[:.)-]?\s*/i, '').trim())
+    .filter((s) => s.length > 8);
+  if (cleaned.length >= 2) return cleaned.slice(0, 8);
+  return instructions
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 8)
+    .slice(0, 8);
+}
+
+function matchFridgeItemsForIngredients(
+  ingredientNames: string[],
+  availableItems: FoodItem[]
+): { matchedAvailable: string[]; matchedExpiringSoon: string[]; matchScore: number } {
+  const matchedAvailable = new Set<string>();
+  const matchedExpiringSoon = new Set<string>();
+  let score = 0;
+
+  const synonymGroups: RegExp[] = [
+    /choy|spinach|greens|kale|cabbage|lettuce/i,
+    /egg/i,
+    /rice/i,
+    /bread|toast|loaf/i,
+    /banana/i,
+    /papaya/i,
+    /lentil|dal/i,
+    /oat/i,
+    /garlic/i,
+    /onion/i,
+    /tomato/i,
+    /carrot/i,
+    /potato/i,
+  ];
+
+  for (const item of availableItems) {
+    const itemLower = item.name.toLowerCase();
+    const matched = ingredientNames.some((ing) => {
+      const ingLower = ing.toLowerCase();
+      if (itemLower.includes(ingLower) || ingLower.includes(itemLower)) return true;
+      return synonymGroups.some((rx) => rx.test(itemLower) && rx.test(ingLower));
+    });
+
+    if (matched) {
+      matchedAvailable.add(item.name);
+      if (daysUntilExpiry(item.expiryDate) <= 2) {
+        matchedExpiringSoon.add(item.name);
+        score += 3;
+      } else {
+        score += 1;
+      }
+    }
+  }
+
+  return {
+    matchedAvailable: Array.from(matchedAvailable),
+    matchedExpiringSoon: Array.from(matchedExpiringSoon),
+    matchScore: score,
+  };
+}
+
+function mapMealDbToRecipe(meal: MealDbRawMeal, availableItems: FoodItem[]): Recipe {
+  const ingEntries = extractMealIngredients(meal);
+  const steps = splitInstructions(meal.strInstructions || '');
+  const { matchedAvailable, matchedExpiringSoon, matchScore } = matchFridgeItemsForIngredients(
+    ingEntries.map((e) => e.raw),
+    availableItems
+  );
+
+  const dietaryTags = ['Halal-Friendly'];
+  if (meal.strCategory === 'Vegetarian' || meal.strCategory === 'Vegan') {
+    dietaryTags.push('Vegetarian');
+  }
+  if (steps.length <= 4) {
+    dietaryTags.push('Under 20 Mins');
+  }
+  if (
+    /porridge|soup|stew|egg|omelette|rice|dal|lentil|banana/i.test(
+      `${meal.strMeal} ${meal.strCategory || ''}`
+    )
+  ) {
+    dietaryTags.push('Soft & Easy-to-Chew');
+  }
+
+  const prepMinutes = Math.max(5, Math.min(15, ingEntries.length + 2));
+  const cookMinutes = steps.length <= 4 ? 12 : 22;
+
+  return {
+    id: `MDB-${meal.idMeal}`,
+    title: meal.strMeal,
+    description: `${meal.strArea || 'International'} ${meal.strCategory || 'home-style'} dish sourced live from TheMealDB and screened for community guidelines.`,
+    prepMinutes,
+    cookMinutes,
+    servings: 2,
+    dietaryTags,
+    ingredients: ingEntries.map((e) => e.display),
+    steps: steps.length > 0 ? steps : ['Prepare ingredients cleanly and cook until heated through.'],
+    imageUrl: meal.strMealThumb || 'asset:stirfry',
+    wasteSavedNote:
+      matchedExpiringSoon.length > 0
+        ? `Prioritises use-soon fridge items: ${matchedExpiringSoon.join(', ')}.`
+        : matchedAvailable.length > 0
+          ? `Uses ${matchedAvailable.length} ingredient(s) currently in the fridge.`
+          : 'Great match for community pantry staples.',
+    matchedAvailable,
+    matchedExpiringSoon,
+    matchScore,
+    source: 'TheMealDB',
+    cuisine: meal.strArea || undefined,
+    category: meal.strCategory || undefined,
+    youtubeUrl: meal.strYoutube && meal.strYoutube.startsWith('https://') ? meal.strYoutube : undefined,
+  };
+}
+
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: '3mb' }));
@@ -790,51 +1012,101 @@ async function startServer() {
     });
   });
 
-  app.get('/api/recipes', (req: Request, res: Response) => {
+  app.get('/api/recipes', async (req: Request, res: Response) => {
     const db = loadDb();
     syncExpiredItems(db);
 
     const dietaryFilter = sanitizeText(req.query.dietary, 40);
+    const searchQuery = sanitizeText(req.query.q, 60);
+    const ingredientQuery = sanitizeText(req.query.ingredient, 40);
     const availableItems = db.items.filter((i) => i.status === 'available' && i.remainingQty > 0);
 
-    const enriched = db.recipes.map((recipe) => {
-      const matchedAvailable: string[] = [];
-      const matchedExpiringSoon: string[] = [];
-      let score = 0;
+    const mealIds = new Set<string>();
+    const rawMeals: MealDbRawMeal[] = [];
+    let queriedIngredients: string[] = [];
 
-      for (const ing of recipe.ingredients) {
-        const match = availableItems.find(
-          (item) =>
-            item.name.toLowerCase().includes(ing.toLowerCase()) ||
-            ing.toLowerCase().includes(item.name.toLowerCase())
-        );
-        if (match) {
-          matchedAvailable.push(match.name);
-          const days = daysUntilExpiry(match.expiryDate);
-          if (days <= 2) {
-            matchedExpiringSoon.push(match.name);
-            score += 3; // Prioritise expiring ingredients
-          } else {
-            score += 1;
-          }
+    if (searchQuery) {
+      const searchRes = await fetchMealDbJson<{ meals: MealDbRawMeal[] | null }>(
+        `/search.php?s=${encodeURIComponent(searchQuery)}`
+      );
+      for (const m of searchRes?.meals || []) {
+        if (!mealIds.has(m.idMeal)) {
+          mealIds.add(m.idMeal);
+          rawMeals.push(m);
         }
       }
+    } else {
+      queriedIngredients = ingredientQuery
+        ? [ingredientQuery.toLowerCase()]
+        : extractFridgeKeywords(availableItems);
 
+      const filterResponses = await Promise.all(
+        queriedIngredients.map((kw) =>
+          fetchMealDbJson<{ meals: Array<{ idMeal: string }> | null }>(
+            `/filter.php?i=${encodeURIComponent(kw)}`
+          )
+        )
+      );
+
+      for (const resp of filterResponses) {
+        for (const item of (resp?.meals || []).slice(0, 3)) {
+          mealIds.add(item.idMeal);
+          if (mealIds.size >= 8) break;
+        }
+        if (mealIds.size >= 8) break;
+      }
+
+      const lookups = await Promise.all(
+        Array.from(mealIds).map((id) =>
+          fetchMealDbJson<{ meals: MealDbRawMeal[] | null }>(
+            `/lookup.php?i=${encodeURIComponent(id)}`
+          )
+        )
+      );
+      for (const resLookup of lookups) {
+        const meal = resLookup?.meals?.[0];
+        if (meal) rawMeals.push(meal);
+      }
+    }
+
+    const mealDbRecipes = rawMeals
+      .filter(isMealHalalFriendly)
+      .slice(0, 8)
+      .map((meal) => mapMealDbToRecipe(meal, availableItems));
+
+    const localRecipes = db.recipes.map((recipe) => {
+      const { matchedAvailable, matchedExpiringSoon, matchScore } = matchFridgeItemsForIngredients(
+        recipe.ingredients,
+        availableItems
+      );
       return {
         ...recipe,
         matchedAvailable,
         matchedExpiringSoon,
-        matchScore: score,
+        matchScore,
+        source: 'Local Pantry' as const,
       };
     });
 
+    const usingLiveMealDb = mealDbRecipes.length > 0;
+    const combined = usingLiveMealDb
+      ? searchQuery || ingredientQuery
+        ? mealDbRecipes
+        : [...mealDbRecipes, ...localRecipes.slice(0, 2)]
+      : localRecipes;
+
     const filtered =
       dietaryFilter && dietaryFilter !== 'All'
-        ? enriched.filter((r) => r.dietaryTags.includes(dietaryFilter))
-        : enriched;
+        ? combined.filter((r) => r.dietaryTags.includes(dietaryFilter))
+        : combined;
 
     filtered.sort((a, b) => (b.matchScore ?? 0) - (a.matchScore ?? 0));
-    res.json({ recipes: filtered });
+
+    res.json({
+      recipes: filtered,
+      source: usingLiveMealDb ? 'themealdb' : 'local-fallback',
+      queriedIngredients,
+    });
   });
 
   app.get('/api/stats', (_req: Request, res: Response) => {

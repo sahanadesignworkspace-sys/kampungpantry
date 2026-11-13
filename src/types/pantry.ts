@@ -54,6 +54,10 @@ export interface Recipe {
   matchedAvailable?: string[];
   matchedExpiringSoon?: string[];
   matchScore?: number;
+  source?: 'TheMealDB' | 'Local Pantry';
+  cuisine?: string;
+  category?: string;
+  youtubeUrl?: string;
 }
 
 export interface ActivityRecord {
