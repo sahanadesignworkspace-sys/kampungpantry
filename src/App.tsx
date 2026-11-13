@@ -24,6 +24,13 @@ import { RecipesView } from './components/RecipesView';
 import { ProfileView } from './components/ProfileView';
 import { CollectModal } from './components/CollectModal';
 import { OfflineIndicator } from './components/PWAControls';
+import {
+  getMockActivities,
+  getMockAnnouncements,
+  getMockFoodItems,
+  getMockRecipes,
+  getMockStats,
+} from './data/mockPantryData';
 
 const PROFILE_STORAGE_KEY = 'kampung_pantry_profile_v1';
 const CACHE_STORAGE_KEY = 'kampung_pantry_offline_cache_v1';
@@ -80,6 +87,33 @@ export default function App() {
   }, [profile]);
 
   const fetchAllData = useCallback(async () => {
+    const applyMockFallback = () => {
+      try {
+        const cached = localStorage.getItem(CACHE_STORAGE_KEY);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed.items) && parsed.items.length > 0) {
+            setItems(parsed.items);
+            setRecipes(parsed.recipes?.length ? parsed.recipes : getMockRecipes());
+            setRecipeSource('local-fallback');
+            setStats(parsed.stats || getMockStats(parsed.items));
+            setAnnouncements(parsed.announcements?.length ? parsed.announcements : getMockAnnouncements());
+            setRecentActivities(parsed.recentActivities?.length ? parsed.recentActivities : getMockActivities());
+            return;
+          }
+        }
+      } catch {
+        // Ignore cache read error
+      }
+      const mockItems = getMockFoodItems();
+      setItems(mockItems);
+      setRecipes(getMockRecipes());
+      setRecipeSource('local-fallback');
+      setStats(getMockStats(mockItems));
+      setAnnouncements(getMockAnnouncements());
+      setRecentActivities(getMockActivities());
+    };
+
     try {
       const [invRes, recRes, statsRes, catRes] = await Promise.all([
         fetch('/api/inventory'),
@@ -97,45 +131,41 @@ export default function App() {
       const statsData = await statsRes.json();
       const catData = await catRes.json().catch(() => ({ categories: [], configured: false }));
 
-      setItems(invData.items || []);
-      setRecipes(recData.recipes || []);
+      const loadedItems: FoodItem[] =
+        Array.isArray(invData.items) && invData.items.length > 0
+          ? invData.items
+          : getMockFoodItems();
+      const loadedRecipes: Recipe[] =
+        Array.isArray(recData.recipes) && recData.recipes.length > 0
+          ? recData.recipes
+          : getMockRecipes();
+
+      setItems(loadedItems);
+      setRecipes(loadedRecipes);
       setMealCategories(catData.categories || []);
       setMealDbConfigured(Boolean(recData.configured ?? catData.configured));
       setRecipeSource(recData.source === 'local-fallback' ? 'local-fallback' : 'themealdb');
       setQueriedIngredients(recData.queriedIngredients || []);
-      setStats(statsData.stats || null);
-      setAnnouncements(statsData.announcements || []);
-      setRecentActivities(statsData.recentActivities || []);
+      setStats(statsData.stats || getMockStats(loadedItems));
+      setAnnouncements(statsData.announcements || getMockAnnouncements());
+      setRecentActivities(statsData.recentActivities || getMockActivities());
 
       try {
         localStorage.setItem(
           CACHE_STORAGE_KEY,
           JSON.stringify({
-            items: invData.items || [],
-            recipes: recData.recipes || [],
-            stats: statsData.stats || null,
-            announcements: statsData.announcements || [],
-            recentActivities: statsData.recentActivities || [],
+            items: loadedItems,
+            recipes: loadedRecipes,
+            stats: statsData.stats || getMockStats(loadedItems),
+            announcements: statsData.announcements || getMockAnnouncements(),
+            recentActivities: statsData.recentActivities || getMockActivities(),
           })
         );
       } catch {
         // Ignore offline cache write error
       }
     } catch {
-      try {
-        const cached = localStorage.getItem(CACHE_STORAGE_KEY);
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          setItems(parsed.items || []);
-          setRecipes(parsed.recipes || []);
-          setRecipeSource('local-fallback');
-          setStats(parsed.stats || null);
-          setAnnouncements(parsed.announcements || []);
-          setRecentActivities(parsed.recentActivities || []);
-        }
-      } catch {
-        // No cached data available
-      }
+      applyMockFallback();
     } finally {
       setLoading(false);
     }
@@ -149,6 +179,34 @@ export default function App() {
       ingredients?: string[];
     }) => {
       setLoadingRecipes(true);
+      const applyLocalRecipeFilter = () => {
+        const allLocal = getMockRecipes();
+        let filtered = allLocal;
+        if (opts.ingredients && opts.ingredients.length > 0) {
+          const sels = opts.ingredients.map((s) => s.toLowerCase());
+          const matched = allLocal.filter((r) =>
+            r.ingredients.some((ing) =>
+              sels.some((sel) => ing.toLowerCase().includes(sel) || sel.includes(ing.toLowerCase()))
+            )
+          );
+          filtered = matched.length > 0 ? matched : allLocal;
+        } else if (opts.q) {
+          const q = opts.q.toLowerCase();
+          filtered = allLocal.filter(
+            (r) =>
+              r.title.toLowerCase().includes(q) ||
+              r.ingredients.some((i) => i.toLowerCase().includes(q))
+          );
+        } else if (opts.ingredient) {
+          const ingQ = opts.ingredient.toLowerCase();
+          filtered = allLocal.filter((r) =>
+            r.ingredients.some((i) => i.toLowerCase().includes(ingQ))
+          );
+        }
+        setRecipes(filtered);
+        setRecipeSource('local-fallback');
+      };
+
       try {
         const params = new URLSearchParams();
         if (opts.q) params.set('q', opts.q);
@@ -164,13 +222,15 @@ export default function App() {
         const res = await fetch(`/api/recipes${query ? `?${query}` : ''}`);
         if (res.ok) {
           const data = await res.json();
-          setRecipes(data.recipes || []);
+          setRecipes(data.recipes || getMockRecipes());
           setMealDbConfigured(Boolean(data.configured));
           setRecipeSource(data.source === 'local-fallback' ? 'local-fallback' : 'themealdb');
           setQueriedIngredients(data.queriedIngredients || []);
+        } else {
+          applyLocalRecipeFilter();
         }
       } catch {
-        setRecipeSource('local-fallback');
+        applyLocalRecipeFilter();
       } finally {
         setLoadingRecipes(false);
       }
