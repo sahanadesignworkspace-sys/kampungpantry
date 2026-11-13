@@ -1,6 +1,9 @@
-import type { ServerlessRequest, ServerlessResponse } from './health';
+import {
+  resolveMealDbConfig,
+  type ServerlessRequest,
+  type ServerlessResponse,
+} from './health.ts';
 
-const DEFAULT_BASE_URL = 'https://www.themealdb.com/api/json/v1';
 const NON_HALAL_PATTERN =
   /\b(pork|bacon|ham|prosciutto|pancetta|lard|chorizo|gammon|wine|beer|rum|brandy|whisky|whiskey|vodka|sherry|mirin|sake|bourbon|gin)\b/i;
 
@@ -185,8 +188,7 @@ export default async function handler(
     ? ingredientsRaw.split(',').map((s) => s.trim()).filter(Boolean)
     : [];
 
-  const apiKey = process.env.THEMEALDB_API_KEY?.trim();
-  const baseUrl = (process.env.THEMEALDB_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
+  const { apiKey, baseUrl } = resolveMealDbConfig();
 
   if (!apiKey) {
     const matchedLocal =

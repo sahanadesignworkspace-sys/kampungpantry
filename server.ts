@@ -15,7 +15,7 @@ import type {
   SmsSubscriber,
   StorageZone,
 } from './src/types/pantry.ts';
-import healthHandler from './api/health.ts';
+import healthHandler, { resolveMealDbConfig } from './api/health.ts';
 import categoriesHandler from './api/categories.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -543,7 +543,6 @@ function requireAdminPin(req: Request, res: Response, next: NextFunction): void 
   next();
 }
 
-const DEFAULT_MEALDB_BASE_URL = 'https://www.themealdb.com/api/json/v1';
 const NON_HALAL_PATTERN =
   /\b(pork|bacon|ham|prosciutto|pancetta|lard|chorizo|gammon|wine|beer|rum|brandy|whisky|whiskey|vodka|sherry|mirin|sake|bourbon|gin)\b/i;
 
@@ -561,12 +560,11 @@ interface MealDbRawMeal {
 const mealDbCache = new Map<string, { expiresAt: number; data: unknown }>();
 
 async function fetchMealDbJson<T>(endpointPath: string): Promise<T | null> {
-  const apiKey = process.env.THEMEALDB_API_KEY?.trim();
+  const { apiKey, baseUrl } = resolveMealDbConfig();
   if (!apiKey) {
     return null;
   }
 
-  const baseUrl = (process.env.THEMEALDB_BASE_URL || DEFAULT_MEALDB_BASE_URL).replace(/\/+$/, '');
   const now = Date.now();
   const cached = mealDbCache.get(endpointPath);
   if (cached && cached.expiresAt > now) {
@@ -1167,7 +1165,7 @@ async function startServer() {
     res.json({
       recipes: filtered,
       source: usingLiveMealDb ? 'themealdb' : 'local-fallback',
-      configured: Boolean(process.env.THEMEALDB_API_KEY?.trim()),
+      configured: Boolean(resolveMealDbConfig().apiKey),
       queriedIngredients,
     });
   });

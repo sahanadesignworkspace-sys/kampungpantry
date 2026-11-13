@@ -1,4 +1,8 @@
-import type { ServerlessRequest, ServerlessResponse } from './health.ts';
+import {
+  resolveMealDbConfig,
+  type ServerlessRequest,
+  type ServerlessResponse,
+} from './health.ts';
 
 export interface MealCategory {
   idCategory: string;
@@ -7,7 +11,6 @@ export interface MealCategory {
   strCategoryDescription: string;
 }
 
-const DEFAULT_BASE_URL = 'https://www.themealdb.com/api/json/v1';
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
 let cachedCategories: { expiresAt: number; items: MealCategory[] } | null = null;
@@ -26,8 +29,9 @@ export default async function handler(
     return;
   }
 
-  const apiKey = process.env.THEMEALDB_API_KEY?.trim();
+  const { apiKey, baseUrl } = resolveMealDbConfig();
   if (!apiKey) {
+    res.setHeader?.('Cache-Control', 'no-store, max-age=0');
     res.status(503).json({
       error:
         'THEMEALDB_API_KEY is not configured. Add your key in environment variables to load live recipe categories.',
@@ -36,8 +40,6 @@ export default async function handler(
     });
     return;
   }
-
-  const baseUrl = (process.env.THEMEALDB_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
 
   if (cachedCategories && cachedCategories.expiresAt > Date.now()) {
     res.status(200).json({

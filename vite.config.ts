@@ -45,6 +45,7 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,woff2}'],
+          navigateFallbackDenylist: [/^\/api\//],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -75,7 +76,7 @@ export default defineConfig(() => {
               },
             },
             {
-              urlPattern: /\/api\/.*/i,
+              urlPattern: /\/api\/(inventory|stats|recipes|categories)(\?.*)?$/i,
               handler: 'NetworkFirst',
               options: {
                 cacheName: 'kampung-api-cache',
