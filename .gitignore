@@ -7,4 +7,4 @@ coverage/
 .env*
 !.env.example
 dev-dist/
-data/
+/data/
