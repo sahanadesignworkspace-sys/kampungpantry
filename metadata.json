@@ -1,0 +1,6 @@
+{
+  "name": "Kampung Pantry",
+  "description": "Share What You Can, Take What You Need. A community food-sharing fridge and pantry web application for HDB estates in Singapore.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
