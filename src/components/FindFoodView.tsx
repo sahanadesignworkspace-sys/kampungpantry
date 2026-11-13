@@ -1,16 +1,40 @@
 import { useMemo, useState } from 'react';
-import { Clock, MapPin, QrCode, Search, ShieldCheck } from 'lucide-react';
-import { APPROVED_CATEGORIES, type ApprovedCategory, type FoodItem } from '../types/pantry';
+import {
+  ArrowRight,
+  BookOpen,
+  Check,
+  Clock,
+  MapPin,
+  QrCode,
+  Search,
+  ShieldCheck,
+  X,
+} from 'lucide-react';
+import {
+  APPROVED_CATEGORIES,
+  type ApprovedCategory,
+  type FoodItem,
+} from '../types/pantry';
 import { formatDaysUntilExpiry } from '../utils/i18n';
 import { FoodImage } from './FoodImage';
 
 interface FindFoodViewProps {
   items: FoodItem[];
+  checkedItemIds: string[];
+  onChangeCheckedItemIds: (nextIds: string[]) => void;
+  onFindMatchingRecipes: (selectedNames: string[]) => void;
   onCollectItem: (item: FoodItem) => void;
   onOpenScanner: () => void;
 }
 
-export function FindFoodView({ items, onCollectItem, onOpenScanner }: FindFoodViewProps) {
+export function FindFoodView({
+  items,
+  checkedItemIds,
+  onChangeCheckedItemIds,
+  onFindMatchingRecipes,
+  onCollectItem,
+  onOpenScanner,
+}: FindFoodViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<'All' | ApprovedCategory>('All');
   const [onlyExpiringSoon, setOnlyExpiringSoon] = useState(false);
@@ -30,6 +54,24 @@ export function FindFoodView({ items, onCollectItem, onOpenScanner }: FindFoodVi
     });
   }, [items, searchQuery, selectedCategory, onlyExpiringSoon]);
 
+  const checkedItems = useMemo(
+    () => items.filter((item) => checkedItemIds.includes(item.id)),
+    [items, checkedItemIds]
+  );
+
+  function toggleIngredientCheck(itemId: string) {
+    if (checkedItemIds.includes(itemId)) {
+      onChangeCheckedItemIds(checkedItemIds.filter((id) => id !== itemId));
+    } else {
+      onChangeCheckedItemIds([...checkedItemIds, itemId]);
+    }
+  }
+
+  function handleFindClick() {
+    if (checkedItems.length === 0) return;
+    onFindMatchingRecipes(checkedItems.map((i) => i.name));
+  }
+
   return (
     <div className="space-y-6">
       {/* Header & Quick QR Scan Trigger */}
@@ -39,7 +81,7 @@ export function FindFoodView({ items, onCollectItem, onOpenScanner }: FindFoodVi
             Live Community Fridge Inventory
           </h1>
           <p className="mt-1 text-base text-[#4B5B51]">
-            Showing only fresh, unexpired items currently available at Blk 412 Void Deck.
+            Browse fresh items or check a few ingredients below to open the Matching Recipes Catalogue.
           </p>
         </div>
         <button
@@ -52,7 +94,7 @@ export function FindFoodView({ items, onCollectItem, onOpenScanner }: FindFoodVi
         </button>
       </div>
 
-      {/* Search & Filter Toolbar (3 simple interactions) */}
+      {/* Search & Filter Toolbar */}
       <div className="rounded-2xl border border-[#E2E6DF] bg-white p-4 space-y-4">
         <div className="flex flex-col md:flex-row gap-3">
           <div className="relative flex-1">
@@ -110,13 +152,52 @@ export function FindFoodView({ items, onCollectItem, onOpenScanner }: FindFoodVi
         </div>
       </div>
 
+      {/* Checked Ingredients Recipe Action Bar */}
+      {checkedItems.length > 0 && (
+        <section
+          aria-label="Selected ingredients for recipe matching"
+          className="rounded-2xl border border-[#BFE0C6] bg-[#F2F7F3] p-4 md:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4"
+        >
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-sm font-bold text-[#14241B]">
+              <BookOpen className="w-4 h-4 text-[#1B5E3A] shrink-0" aria-hidden="true" />
+              <span className="tabular-nums">
+                {checkedItems.length} fresh {checkedItems.length === 1 ? 'ingredient' : 'ingredients'} checked
+              </span>
+            </div>
+            <p className="text-sm text-[#35443B]">
+              {checkedItems.map((i) => i.name).join(' · ')}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => onChangeCheckedItemIds([])}
+              className="min-h-[44px] inline-flex items-center gap-1.5 rounded-xl border border-[#C5D1C7] bg-white px-4 text-sm font-semibold text-[#35443B] hover:bg-[#F7FAF7] cursor-pointer"
+            >
+              <X className="w-4 h-4 shrink-0" aria-hidden="true" />
+              <span>Clear</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleFindClick}
+              className="min-h-[44px] inline-flex items-center gap-2 rounded-xl bg-[#1B5E3A] px-5 text-sm font-semibold text-white hover:bg-[#154A2D] transition-colors cursor-pointer"
+            >
+              <span>Find Matching Recipes</span>
+              <ArrowRight className="w-4 h-4 shrink-0" aria-hidden="true" />
+            </button>
+          </div>
+        </section>
+      )}
+
       {/* Results Count */}
-      <div className="flex items-center justify-between text-sm text-[#4B5B51]">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-[#4B5B51]">
         <span className="tabular-nums">
           Showing <strong>{filteredItems.length}</strong> available{' '}
           {filteredItems.length === 1 ? 'item' : 'items'}
         </span>
-        <span>No smartphone required at the fridge</span>
+        <span>Tip: Check items below to cook them together</span>
       </div>
 
       {/* Inventory Grid */}
@@ -144,10 +225,13 @@ export function FindFoodView({ items, onCollectItem, onOpenScanner }: FindFoodVi
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filteredItems.map((item) => {
             const exp = formatDaysUntilExpiry(item.expiryDate);
+            const isChecked = checkedItemIds.includes(item.id);
             return (
               <article
                 key={item.id}
-                className="rounded-2xl border border-[#E2E6DF] bg-white overflow-hidden flex flex-col justify-between"
+                className={`rounded-2xl border bg-white overflow-hidden flex flex-col justify-between transition-colors ${
+                  isChecked ? 'border-[#1B5E3A] ring-1 ring-[#1B5E3A]' : 'border-[#E2E6DF]'
+                }`}
               >
                 <div>
                   <div className="aspect-[4/3] w-full bg-[#EEF3EE] overflow-hidden">
@@ -205,7 +289,30 @@ export function FindFoodView({ items, onCollectItem, onOpenScanner }: FindFoodVi
                   </div>
                 </div>
 
-                <div className="px-5 pb-5">
+                <div className="px-5 pb-5 space-y-2.5">
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={isChecked}
+                    onClick={() => toggleIngredientCheck(item.id)}
+                    className={`w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition-colors cursor-pointer ${
+                      isChecked
+                        ? 'border-[#1B5E3A] bg-[#F2F7F3] text-[#1B5E3A]'
+                        : 'border-[#CFD7CC] bg-[#FBFBF8] text-[#1A241E] hover:border-[#1B5E3A]'
+                    }`}
+                  >
+                    <span
+                      className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${
+                        isChecked
+                          ? 'bg-[#1B5E3A] border-[#1B5E3A] text-white'
+                          : 'bg-white border-[#94A39B]'
+                      }`}
+                    >
+                      {isChecked && <Check className="w-3.5 h-3.5" aria-hidden="true" />}
+                    </span>
+                    <span>{isChecked ? 'Checked for Recipes' : 'Use in Recipe Match'}</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={() => onCollectItem(item)}

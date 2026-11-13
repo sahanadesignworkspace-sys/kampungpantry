@@ -15,6 +15,8 @@ import type {
   SmsSubscriber,
   StorageZone,
 } from './src/types/pantry.ts';
+import healthHandler from './api/health.ts';
+import categoriesHandler from './api/categories.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -541,7 +543,7 @@ function requireAdminPin(req: Request, res: Response, next: NextFunction): void 
   next();
 }
 
-const MEALDB_BASE = 'https://www.themealdb.com/api/json/v1/1';
+const DEFAULT_MEALDB_BASE_URL = 'https://www.themealdb.com/api/json/v1';
 const NON_HALAL_PATTERN =
   /\b(pork|bacon|ham|prosciutto|pancetta|lard|chorizo|gammon|wine|beer|rum|brandy|whisky|whiskey|vodka|sherry|mirin|sake|bourbon|gin)\b/i;
 
@@ -559,6 +561,12 @@ interface MealDbRawMeal {
 const mealDbCache = new Map<string, { expiresAt: number; data: unknown }>();
 
 async function fetchMealDbJson<T>(endpointPath: string): Promise<T | null> {
+  const apiKey = process.env.THEMEALDB_API_KEY?.trim();
+  if (!apiKey) {
+    return null;
+  }
+
+  const baseUrl = (process.env.THEMEALDB_BASE_URL || DEFAULT_MEALDB_BASE_URL).replace(/\/+$/, '');
   const now = Date.now();
   const cached = mealDbCache.get(endpointPath);
   if (cached && cached.expiresAt > now) {
@@ -568,7 +576,7 @@ async function fetchMealDbJson<T>(endpointPath: string): Promise<T | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 4500);
   try {
-    const res = await fetch(`${MEALDB_BASE}${endpointPath}`, {
+    const res = await fetch(`${baseUrl}/${encodeURIComponent(apiKey)}${endpointPath}`, {
       signal: controller.signal,
     });
     if (!res.ok) return null;
@@ -767,8 +775,12 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '3mb' }));
 
-  app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok', service: 'Kampung Pantry API' });
+  app.get('/api/health', (req: Request, res: Response) => {
+    healthHandler(req, res);
+  });
+
+  app.get('/api/categories', async (req: Request, res: Response) => {
+    await categoriesHandler(req, res);
   });
 
   app.get('/api/inventory', (req: Request, res: Response) => {
@@ -1019,9 +1031,31 @@ async function startServer() {
     const dietaryFilter = sanitizeText(req.query.dietary, 40);
     const searchQuery = sanitizeText(req.query.q, 60);
     const ingredientQuery = sanitizeText(req.query.ingredient, 40);
+    const ingredientsListRaw = sanitizeText(req.query.ingredients, 240);
+    const categoryQuery = sanitizeText(req.query.category, 40);
     const availableItems = db.items.filter((i) => i.status === 'available' && i.remainingQty > 0);
 
+    const selectedNames = ingredientsListRaw
+      ? ingredientsListRaw
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+
+    const matchingScopeItems =
+      selectedNames.length > 0
+        ? availableItems.filter((item) =>
+            selectedNames.some(
+              (sel) =>
+                item.id.toLowerCase() === sel.toLowerCase() ||
+                item.name.toLowerCase().includes(sel.toLowerCase()) ||
+                sel.toLowerCase().includes(item.name.toLowerCase())
+            )
+          )
+        : availableItems;
+
     const mealIds = new Set<string>();
+    const mealHitCounts = new Map<string, number>();
     const rawMeals: MealDbRawMeal[] = [];
     let queriedIngredients: string[] = [];
 
@@ -1035,10 +1069,28 @@ async function startServer() {
           rawMeals.push(m);
         }
       }
+    } else if (categoryQuery) {
+      const catRes = await fetchMealDbJson<{ meals: Array<{ idMeal: string }> | null }>(
+        `/filter.php?c=${encodeURIComponent(categoryQuery)}`
+      );
+      for (const item of (catRes?.meals || []).slice(0, 6)) {
+        mealIds.add(item.idMeal);
+      }
+      const lookups = await Promise.all(
+        Array.from(mealIds).map((id) =>
+          fetchMealDbJson<{ meals: MealDbRawMeal[] | null }>(
+            `/lookup.php?i=${encodeURIComponent(id)}`
+          )
+        )
+      );
+      for (const resLookup of lookups) {
+        const meal = resLookup?.meals?.[0];
+        if (meal) rawMeals.push(meal);
+      }
     } else {
       queriedIngredients = ingredientQuery
         ? [ingredientQuery.toLowerCase()]
-        : extractFridgeKeywords(availableItems);
+        : extractFridgeKeywords(matchingScopeItems.length > 0 ? matchingScopeItems : availableItems);
 
       const filterResponses = await Promise.all(
         queriedIngredients.map((kw) =>
@@ -1049,12 +1101,18 @@ async function startServer() {
       );
 
       for (const resp of filterResponses) {
-        for (const item of (resp?.meals || []).slice(0, 3)) {
-          mealIds.add(item.idMeal);
-          if (mealIds.size >= 8) break;
+        for (const item of (resp?.meals || []).slice(0, 6)) {
+          mealHitCounts.set(item.idMeal, (mealHitCounts.get(item.idMeal) || 0) + 1);
         }
-        if (mealIds.size >= 8) break;
       }
+
+      // Prioritise meals matching multiple checked ingredients
+      const rankedIds = Array.from(mealHitCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .map(([id]) => id);
+
+      for (const id of rankedIds) mealIds.add(id);
 
       const lookups = await Promise.all(
         Array.from(mealIds).map((id) =>
@@ -1069,15 +1127,17 @@ async function startServer() {
       }
     }
 
+    const scopeForScoring = matchingScopeItems.length > 0 ? matchingScopeItems : availableItems;
+
     const mealDbRecipes = rawMeals
       .filter(isMealHalalFriendly)
       .slice(0, 8)
-      .map((meal) => mapMealDbToRecipe(meal, availableItems));
+      .map((meal) => mapMealDbToRecipe(meal, scopeForScoring));
 
     const localRecipes = db.recipes.map((recipe) => {
       const { matchedAvailable, matchedExpiringSoon, matchScore } = matchFridgeItemsForIngredients(
         recipe.ingredients,
-        availableItems
+        scopeForScoring
       );
       return {
         ...recipe,
@@ -1090,10 +1150,12 @@ async function startServer() {
 
     const usingLiveMealDb = mealDbRecipes.length > 0;
     const combined = usingLiveMealDb
-      ? searchQuery || ingredientQuery
+      ? searchQuery || ingredientQuery || categoryQuery || selectedNames.length > 0
         ? mealDbRecipes
         : [...mealDbRecipes, ...localRecipes.slice(0, 2)]
-      : localRecipes;
+      : selectedNames.length > 0
+        ? localRecipes.filter((r) => (r.matchedAvailable?.length || 0) > 0)
+        : localRecipes;
 
     const filtered =
       dietaryFilter && dietaryFilter !== 'All'
@@ -1105,6 +1167,7 @@ async function startServer() {
     res.json({
       recipes: filtered,
       source: usingLiveMealDb ? 'themealdb' : 'local-fallback',
+      configured: Boolean(process.env.THEMEALDB_API_KEY?.trim()),
       queriedIngredients,
     });
   });

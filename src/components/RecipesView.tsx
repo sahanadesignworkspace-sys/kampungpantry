@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
+  ArrowLeft,
   CheckCircle2,
   Clock,
   ExternalLink,
@@ -12,10 +13,13 @@ import { FoodImage } from './FoodImage';
 
 interface RecipesViewProps {
   recipes: Recipe[];
+  mealCategories: Array<{ idCategory: string; strCategory: string }>;
+  mealDbConfigured: boolean;
   recipeSource: 'themealdb' | 'local-fallback';
   queriedIngredients: string[];
+  selectedIngredients: string[];
   loadingRecipes: boolean;
-  onSearchRecipes: (opts: { q?: string; ingredient?: string }) => void;
+  onSearchRecipes: (opts: { q?: string; ingredient?: string; category?: string }) => void;
   onGoToFind: () => void;
 }
 
@@ -39,8 +43,11 @@ const INGREDIENT_SHORTCUTS = [
 
 export function RecipesView({
   recipes,
+  mealCategories,
+  mealDbConfigured,
   recipeSource,
   queriedIngredients,
+  selectedIngredients,
   loadingRecipes,
   onSearchRecipes,
   onGoToFind,
@@ -48,6 +55,7 @@ export function RecipesView({
   const [dietFilter, setDietFilter] = useState<string>('All');
   const [searchInput, setSearchInput] = useState('');
   const [activeIngredient, setActiveIngredient] = useState('');
+  const [activeCategory, setActiveCategory] = useState('');
   const [expandedId, setExpandedId] = useState<string>('');
 
   const visibleRecipes = useMemo(() => {
@@ -58,13 +66,22 @@ export function RecipesView({
   function handleSearchSubmit(e: React.FormEvent) {
     e.preventDefault();
     setActiveIngredient('');
+    setActiveCategory('');
     onSearchRecipes({ q: searchInput.trim() });
   }
 
   function handleIngredientClick(ing: string) {
     setActiveIngredient(ing);
+    setActiveCategory('');
     setSearchInput('');
     onSearchRecipes(ing ? { ingredient: ing } : {});
+  }
+
+  function handleCategoryClick(cat: string) {
+    setActiveCategory(cat);
+    setActiveIngredient('');
+    setSearchInput('');
+    onSearchRecipes(cat ? { category: cat } : {});
   }
 
   return (
@@ -72,26 +89,53 @@ export function RecipesView({
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold text-[#14241B]">
-            Smart Waste-Saving Recipes
+            {selectedIngredients.length > 0
+              ? 'Matching Recipes Catalogue'
+              : 'Smart Waste-Saving Recipes'}
           </h1>
           <p className="mt-1 text-base text-[#4B5B51]">
             {recipeSource === 'themealdb'
               ? `Powered by TheMealDB & screened for Halal-friendly guidelines${
                   queriedIngredients.length > 0
-                    ? ` — matched to fridge items (${queriedIngredients.join(', ')})`
+                    ? ` — matched to (${queriedIngredients.join(', ')})`
                     : ''
                 }.`
-              : 'Showing offline saved recipes prioritising ingredients available in the fridge.'}
+              : mealDbConfigured
+                ? 'Showing saved pantry recipes prioritising ingredients available in the fridge.'
+                : 'Showing local pantry matches. Add THEMEALDB_API_KEY in environment variables to enable live TheMealDB results.'}
           </p>
         </div>
         <button
           type="button"
           onClick={onGoToFind}
-          className="min-h-[44px] px-4 py-2 rounded-xl border border-[#1B5E3A] text-sm font-semibold text-[#1B5E3A] hover:bg-[#F2F7F3] whitespace-nowrap shrink-0 cursor-pointer"
+          className="min-h-[44px] inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-[#1B5E3A] text-sm font-semibold text-[#1B5E3A] hover:bg-[#F2F7F3] whitespace-nowrap shrink-0 cursor-pointer"
         >
-          Collect Fridge Ingredients
+          <ArrowLeft className="w-4 h-4 shrink-0" aria-hidden="true" />
+          <span>{selectedIngredients.length > 0 ? 'Back to Find Food' : 'Collect Fridge Ingredients'}</span>
         </button>
       </div>
+
+      {/* Selected Ingredients Banner when redirected from Find Food */}
+      {selectedIngredients.length > 0 && (
+        <div className="rounded-2xl border border-[#BFE0C6] bg-[#F2F7F3] p-4 md:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="text-sm font-bold text-[#14241B]">
+              Matched to your {selectedIngredients.length} checked{' '}
+              {selectedIngredients.length === 1 ? 'ingredient' : 'ingredients'}:
+            </div>
+            <div className="text-sm text-[#1B5E3A] font-medium">
+              {selectedIngredients.join(' · ')}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleIngredientClick('')}
+            className="min-h-[44px] px-4 py-2 rounded-xl border border-[#C5D1C7] bg-white text-sm font-semibold text-[#1A241E] hover:bg-[#F7FAF7] whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            Show All Fridge Recipes
+          </button>
+        </div>
+      )}
 
       {/* Search & Live Ingredient Selector */}
       <div className="rounded-2xl border border-[#E2E6DF] bg-white p-4 space-y-4">
@@ -121,7 +165,7 @@ export function RecipesView({
         {/* Quick Fridge Ingredient Shortcuts */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
           {INGREDIENT_SHORTCUTS.map((item) => {
-            const active = activeIngredient === item.value && !searchInput;
+            const active = activeIngredient === item.value && !activeCategory && !searchInput;
             return (
               <button
                 key={item.label}
@@ -138,6 +182,29 @@ export function RecipesView({
             );
           })}
         </div>
+
+        {/* Live TheMealDB Categories (from /api/categories) */}
+        {mealCategories.length > 0 && (
+          <div className="flex items-center gap-2 overflow-x-auto pt-1 border-t border-[#EAECE7]">
+            <span className="text-xs font-semibold text-[#59695F] whitespace-nowrap shrink-0">
+              MealDB Categories:
+            </span>
+            {mealCategories.slice(0, 8).map((cat) => (
+              <button
+                key={cat.idCategory}
+                type="button"
+                onClick={() => handleCategoryClick(cat.strCategory)}
+                className={`min-h-[38px] px-3 py-1 rounded-lg border text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  activeCategory === cat.strCategory
+                    ? 'border-[#1B5E3A] bg-[#1B5E3A] text-white'
+                    : 'border-[#DCE2DA] bg-white text-[#35443B] hover:border-[#1B5E3A]'
+                }`}
+              >
+                {cat.strCategory}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Dietary Filters */}
         <div

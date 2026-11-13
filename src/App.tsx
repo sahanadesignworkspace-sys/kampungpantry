@@ -40,8 +40,12 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('home');
   const [items, setItems] = useState<FoodItem[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [mealCategories, setMealCategories] = useState<Array<{ idCategory: string; strCategory: string }>>([]);
+  const [mealDbConfigured, setMealDbConfigured] = useState(false);
   const [recipeSource, setRecipeSource] = useState<'themealdb' | 'local-fallback'>('themealdb');
   const [queriedIngredients, setQueriedIngredients] = useState<string[]>([]);
+  const [checkedIngredientIds, setCheckedIngredientIds] = useState<string[]>([]);
+  const [selectedRecipeIngredients, setSelectedRecipeIngredients] = useState<string[]>([]);
   const [loadingRecipes, setLoadingRecipes] = useState(false);
   const [stats, setStats] = useState<CommunityStats | null>(null);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -77,10 +81,11 @@ export default function App() {
 
   const fetchAllData = useCallback(async () => {
     try {
-      const [invRes, recRes, statsRes] = await Promise.all([
+      const [invRes, recRes, statsRes, catRes] = await Promise.all([
         fetch('/api/inventory'),
         fetch('/api/recipes'),
         fetch('/api/stats'),
+        fetch('/api/categories'),
       ]);
 
       if (!invRes.ok || !recRes.ok || !statsRes.ok) {
@@ -90,9 +95,12 @@ export default function App() {
       const invData = await invRes.json();
       const recData = await recRes.json();
       const statsData = await statsRes.json();
+      const catData = await catRes.json().catch(() => ({ categories: [], configured: false }));
 
       setItems(invData.items || []);
       setRecipes(recData.recipes || []);
+      setMealCategories(catData.categories || []);
+      setMealDbConfigured(Boolean(recData.configured ?? catData.configured));
       setRecipeSource(recData.source === 'local-fallback' ? 'local-fallback' : 'themealdb');
       setQueriedIngredients(recData.queriedIngredients || []);
       setStats(statsData.stats || null);
@@ -134,17 +142,30 @@ export default function App() {
   }, []);
 
   const handleSearchRecipes = useCallback(
-    async (opts: { q?: string; ingredient?: string }) => {
+    async (opts: {
+      q?: string;
+      ingredient?: string;
+      category?: string;
+      ingredients?: string[];
+    }) => {
       setLoadingRecipes(true);
       try {
         const params = new URLSearchParams();
         if (opts.q) params.set('q', opts.q);
         if (opts.ingredient) params.set('ingredient', opts.ingredient);
+        if (opts.category) params.set('category', opts.category);
+        if (opts.ingredients && opts.ingredients.length > 0) {
+          params.set('ingredients', opts.ingredients.join(','));
+          setSelectedRecipeIngredients(opts.ingredients);
+        } else {
+          setSelectedRecipeIngredients([]);
+        }
         const query = params.toString();
         const res = await fetch(`/api/recipes${query ? `?${query}` : ''}`);
         if (res.ok) {
           const data = await res.json();
           setRecipes(data.recipes || []);
+          setMealDbConfigured(Boolean(data.configured));
           setRecipeSource(data.source === 'local-fallback' ? 'local-fallback' : 'themealdb');
           setQueriedIngredients(data.queriedIngredients || []);
         }
@@ -156,6 +177,12 @@ export default function App() {
     },
     []
   );
+
+  function handleFindMatchingRecipes(selectedNames: string[]) {
+    setActiveTab('recipes');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    handleSearchRecipes({ ingredients: selectedNames });
+  }
 
   useEffect(() => {
     fetchAllData();
@@ -281,6 +308,9 @@ export default function App() {
             {activeTab === 'find' && (
               <FindFoodView
                 items={items}
+                checkedItemIds={checkedIngredientIds}
+                onChangeCheckedItemIds={setCheckedIngredientIds}
+                onFindMatchingRecipes={handleFindMatchingRecipes}
                 onCollectItem={(item) => handleOpenCollect(item)}
                 onOpenScanner={() => handleOpenCollect(null)}
               />
@@ -304,8 +334,11 @@ export default function App() {
             {activeTab === 'recipes' && (
               <RecipesView
                 recipes={recipes}
+                mealCategories={mealCategories}
+                mealDbConfigured={mealDbConfigured}
                 recipeSource={recipeSource}
                 queriedIngredients={queriedIngredients}
+                selectedIngredients={selectedRecipeIngredients}
                 loadingRecipes={loadingRecipes}
                 onSearchRecipes={handleSearchRecipes}
                 onGoToFind={() => handleNavigate('find')}
